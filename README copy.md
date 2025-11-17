@@ -1,2 +1,0 @@
-# Underwater Image Enhancement Based on Adaptive Color Correction and Improved Retinex Algorithm
-本代码仓库是基于《Underwater Image Enhancement Based on Adaptive Color Correction and Improved Retinex Algorithm》的matlab的python实现版本
