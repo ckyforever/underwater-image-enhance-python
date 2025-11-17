@@ -1,0 +1,7 @@
+# 忽略所有__pycache__文件夹
+__pycache__/
+
+# 或者更全面的Python缓存文件忽略
+**/__pycache__/
+*.py[cod]
+*$py.class
