@@ -1,5 +1,7 @@
 import numpy as np
 from scipy import ndimage
+import cv2
+from skimage.color import rgb2hsv, hsv2rgb
 
 
 def compensate3(img):
@@ -115,7 +117,8 @@ def simple_color_balance(img):
     output = output.astype(np.uint8)
     return output
 
-def average_decomposition(I, alpha=1, hsize=31):
+
+def average_decomposition(img, alpha=1, hsize=31):
     """
     双尺度图像分解算法
     参数:
@@ -128,23 +131,145 @@ def average_decomposition(I, alpha=1, hsize=31):
     D: 高频分量
     """
     # 将图像转换为double类型（0-1范围）
-    I = I.astype(np.float64) / 255.0
-    
+    img = img.astype(np.float64) / 255.0
+
     # 创建平均滤波器
     f = np.ones((hsize, hsize)) / (hsize * hsize)
-    
+
     # 对每个通道分别应用平均滤波器获取低频分量
-    if len(I.shape) == 3:  # 彩色图像
-        B = np.zeros_like(I)
-        for i in range(I.shape[2]):  # 对每个通道进行处理
-            B[:, :, i] = ndimage.convolve(I[:, :, i], f, mode='nearest')
+    if len(img.shape) == 3:  # 彩色图像
+        B = np.zeros_like(img)
+        for i in range(img.shape[2]):  # 对每个通道进行处理
+            B[:, :, i] = ndimage.convolve(img[:, :, i], f, mode="nearest")
     else:  # 灰度图像
-        B = ndimage.convolve(I, f, mode='nearest')
-    
+        B = ndimage.convolve(img, f, mode="nearest")
+
     # 计算高频分量
-    D = I - B
-    
+    D = img - B
+
     # 结合原始图像和增强的高频分量
-    result = I + alpha * D
-    
+    result = img + alpha * D
+
     return result, B, D
+
+
+def gamma_correction_auto_2d(img):
+    """
+    2D自适应伽马校正函数
+    该函数通过多尺度高斯滤波来自动确定局部伽马值，实现图像增强
+
+    参数:
+    input1: 输入图像（可以是彩色或灰度图像）
+
+    返回:
+    result: 经过伽马校正的图像
+    """
+
+    # 将输入图像转换为双精度浮点型（0-1范围）
+    if img.dtype != np.float64:
+        img = img.astype(np.float64) / 255.0
+
+    # 检查是否为彩色图像（3通道）
+    if len(img.shape) == 3:
+        # 将RGB图像转换为HSV色彩空间
+        HSV = rgb2hsv(img)
+        V = HSV[:, :, 2]  # 提取明度通道
+
+        # 获取图像尺寸
+        height, width = img.shape[:2]
+        filter_size = min(height, width)  # 确定滤波器大小
+
+        # 设置多尺度高斯滤波参数
+        c = [15, 80, 250]  # 三个不同的标准差参数
+        q = np.sqrt(2)  # 缩放因子
+
+        # OpenCV 的 ksize 必须是正奇数，sigmaX 控制模糊程度
+        def blur_with_sigma(image, sigma):
+            # 根据 sigma 自动计算合适的 kernel size（经验公式）
+            ksize = int(2 * np.ceil(3 * sigma) + 1)
+            if ksize % 2 == 0:
+                ksize += 1
+            return cv2.GaussianBlur(
+                image, (ksize, ksize), sigmaX=sigma, borderType=cv2.BORDER_REPLICATE
+            )
+
+        g1 = blur_with_sigma(V, c[0] / q)
+        g2 = blur_with_sigma(V, c[1] / q)
+        g3 = blur_with_sigma(V, c[2] / q)
+
+        # 如果需要转回 float [0,1] 范围（与 skimage 一致）
+        g1 = g1.astype(np.float64) / 255.0
+        g2 = g2.astype(np.float64) / 255.0
+        g3 = g3.astype(np.float64) / 255.0
+
+        # 计算加权平均响应
+        I = (g1 + g2 + g3) / 3
+
+        # 计算全局平均亮度
+        m = np.mean(I)
+
+        # 根据局部亮度计算自适应伽马值
+        the_gamma = np.power(0.5, (m - I) / m)
+
+        # 应用伽马校正到明度通道
+        HSV[:, :, 2] = np.power(V, the_gamma)
+
+        # 将HSV转换回RGB色彩空间
+        result = hsv2rgb(HSV)
+    else:
+        # 处理灰度图像
+        V = img
+        height, width = img.shape
+        filter_size = min(height, width)
+
+        # 设置多尺度高斯滤波参数
+        c = [15, 80, 250]
+        q = np.sqrt(2)
+
+        # 创建三种不同尺度的高斯滤波器
+        f1 = gaussian_filter(filter_size, c[0] / q)
+        f2 = gaussian_filter(filter_size, c[1] / q)
+        f3 = gaussian_filter(filter_size, c[2] / q)
+
+        # 分别应用三个滤波器
+        g1 = ndimage.convolve(V, f1, mode="reflect")
+        g2 = ndimage.convolve(V, f2, mode="reflect")
+        g3 = ndimage.convolve(V, f3, mode="reflect")
+
+        # 计算加权平均响应
+        I = (g1 + g2 + g3) / 3
+
+        # 计算全局平均亮度
+        m = np.mean(I)
+
+        # 根据局部亮度计算自适应伽马值
+        the_gamma = np.power(0.5, (m - I) / m)
+
+        # 应用伽马校正
+        V = np.power(V, the_gamma)
+        result = V
+
+    return (result * 255).astype(np.uint8)
+
+
+def gaussian_filter(size, sigma):
+    """
+    创建高斯滤波器
+
+    参数:
+    size: 滤波器大小
+    sigma: 高斯分布的标准差
+
+    返回:
+    二维高斯核
+    """
+
+    # 创建坐标网格
+    ax = np.arange(-size // 2 + 1.0, size // 2 + 1.0)
+    xx, yy = np.meshgrid(ax, ax)
+
+    # 计算高斯核
+    kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+
+    # 归一化
+    return kernel / np.sum(kernel)
